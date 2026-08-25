@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Credentials - contains the Clockify API key
+.env
+
+# Generated output. These contain personal working hours and absence data,
+# and are rebuilt from Clockify by `npm run dashboard` / `npm run report`.
+out/
+www/
+.cache/
+absences.local.json
+
+# Source exports (Timerevision CSV, company workbooks) - personal data,
+# keep them in Downloads rather than in the repo.
+*.xlsx
+*.csv
+!example*.csv
+
+# Misc
+*.log
+.DS_Thumbs
+Thumbs.db

@@ -1,0 +1,6 @@
+[
+  { "date": "2026-07-13", "kind": "VACATION", "fraction": 1,   "label": "Urlaub",            "source": "manual" },
+  { "date": "2026-07-14", "kind": "VACATION", "fraction": 0.5, "label": "Urlaub halber Tag", "source": "manual" },
+  { "date": "2026-03-02", "kind": "SICK",     "fraction": 1,   "label": "Krank",             "source": "manual" },
+  { "date": "2026-05-04", "kind": "TIME_OFF", "fraction": 1,   "label": "Ueberstundenabbau", "source": "manual" }
+]
