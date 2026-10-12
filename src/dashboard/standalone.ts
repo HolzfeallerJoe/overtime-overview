@@ -30,11 +30,16 @@ ${head}
   /* The artifact host paints a ground behind the page; standing alone we own it. */
   html { background: var(--plane); }
 
-  .theme-toggle {
+  .shell-controls {
     position: fixed;
     top: 14px;
     right: 14px;
     z-index: 10;
+    display: flex;
+    gap: 8px;
+  }
+
+  .theme-toggle, .live {
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -50,30 +55,49 @@ ${head}
     cursor: pointer;
   }
 
-  .theme-toggle:hover { color: var(--ink); }
-  .theme-toggle:focus-visible { outline: 2px solid var(--pos); outline-offset: 2px; }
+  .theme-toggle:hover, .live:hover { color: var(--ink); }
+  .theme-toggle:focus-visible, .live:focus-visible { outline: 2px solid var(--pos); outline-offset: 2px; }
   .theme-toggle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; }
 
-  /* Keep the button clear of the masthead on narrow screens. */
+  .live[hidden] { display: none; }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .live[data-state="live"] .live-dot { background: var(--pos); }
+  .live[data-state="busy"] .live-dot { background: var(--pos); animation: live-pulse 1s ease-in-out infinite alternate; }
+  .live[data-state="error"] .live-dot { background: var(--neg); }
+  .live[data-state="busy"] { cursor: progress; }
+  @keyframes live-pulse { to { opacity: 0.25; } }
+
+  /* Briefly mark the sheet when fresh numbers land. */
+  main.is-fresh { animation: sheet-fresh 0.6s ease-out; }
+  @keyframes sheet-fresh { from { opacity: 0.55; } }
+
+  /* Keep the buttons clear of the masthead on narrow screens. */
   @media (max-width: 640px) {
-    .theme-toggle { position: static; margin: 14px 0 0 16px; box-shadow: none; }
+    .shell-controls { position: static; margin: 14px 0 0 16px; }
+    .theme-toggle, .live { box-shadow: none; }
   }
 
   @media print {
-    .theme-toggle { display: none; }
+    .shell-controls { display: none; }
     .panel { box-shadow: none; break-inside: avoid; }
   }
 </style>
 </head>
 <body>
-<button class="theme-toggle" id="theme-toggle" type="button" aria-live="polite">
-  <svg viewBox="0 0 24 24" aria-hidden="true" id="theme-icon"></svg>
-  <span id="theme-label">System</span>
-</button>
+<div class="shell-controls">
+  <button class="live" id="live" type="button" data-state="offline" hidden>
+    <span class="live-dot" aria-hidden="true"></span>
+    <span id="live-label" aria-live="polite">Connecting</span>
+  </button>
+  <button class="theme-toggle" id="theme-toggle" type="button" aria-live="polite">
+    <svg viewBox="0 0 24 24" aria-hidden="true" id="theme-icon"></svg>
+    <span id="theme-label">System</span>
+  </button>
+</div>
 
 ${body}
 
-<script>
+<script data-shell>
   (function () {
     var KEY = 'overtime-theme';
     var MODES = ['system', 'light', 'dark'];
@@ -107,6 +131,100 @@ ${body}
     });
 
     apply();
+  })();
+</script>
+
+<script data-shell>
+  // Live refresh. server/serve.cjs regenerates this page on a timer and
+  // announces each new version over /events; we fetch it and swap <main> in
+  // place, then re-run the page's own scripts against the new markup.
+  (function () {
+    var btn = document.getElementById('live');
+    var label = document.getElementById('live-label');
+    if (!btn || location.protocol === 'file:' || !window.EventSource || !window.DOMParser) return;
+    btn.hidden = false;
+
+    var state = null;      // last message from the server
+    var shown = null;      // version currently on screen
+    var online = false;
+    var swapping = false;
+
+    function time(ms) {
+      return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function render() {
+      var s, text, title;
+      if (!online) {
+        s = 'offline'; text = 'Offline'; title = 'Server not reachable - the numbers on screen stay as they are.';
+      } else if (state.refreshing) {
+        s = 'busy'; text = 'Updating'; title = 'Fetching the latest entries from Clockify.';
+      } else if (state.error) {
+        s = 'error'; text = 'Update failed'; title = state.error + '\\nClick to retry.';
+      } else {
+        s = 'live'; text = shown ? 'Updated ' + time(shown) : 'Live';
+        title = 'Click to update now.' + (state.everyMinutes ? ' Updates every ' + state.everyMinutes + ' min.' : '');
+      }
+      btn.setAttribute('data-state', s);
+      label.textContent = text;
+      btn.title = title;
+      btn.setAttribute('aria-label', text + '. ' + title);
+    }
+
+    function swap() {
+      if (swapping || !state || state.version === null || state.version === shown) return;
+      swapping = true;
+      var version = state.version;
+
+      fetch('/index.html', { cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function (html) {
+          var doc = new DOMParser().parseFromString(html, 'text/html');
+          var next = doc.querySelector('main');
+          var current = document.querySelector('main');
+          if (!next || !current) throw new Error('no <main> in the new page');
+
+          var fresh = document.importNode(next, true);
+          fresh.classList.add('is-fresh');
+          current.replaceWith(fresh);
+          if (doc.title) document.title = doc.title;
+
+          // Scripts arriving via DOMParser are inert; recreate them so the chart
+          // binds to the new SVG and its new data.
+          document.querySelectorAll('body > script:not([data-shell])').forEach(function (s) { s.remove(); });
+          doc.querySelectorAll('body > script:not([data-shell])').forEach(function (s) {
+            var run = document.createElement('script');
+            run.textContent = s.textContent;
+            document.body.appendChild(run);
+          });
+
+          shown = version;
+        })
+        .catch(function (err) { console.warn('Live refresh failed:', err); })
+        .then(function () {
+          swapping = false;
+          render();
+          if (state && state.version !== shown) setTimeout(swap, 1000);
+        });
+    }
+
+    var events = new EventSource('/events');
+    events.onopen = function () { online = true; };
+    events.onerror = function () { online = false; render(); };
+    events.onmessage = function (e) {
+      online = true;
+      state = JSON.parse(e.data);
+      // The page was just loaded fresh, so the first version we hear about is
+      // the one on screen. After a server restart a newer one triggers a swap.
+      if (shown === null) shown = state.version;
+      render();
+      swap();
+    };
+
+    btn.addEventListener('click', function () {
+      if (!online || (state && state.refreshing)) return;
+      fetch('/refresh', { method: 'POST' }).catch(function () {});
+    });
   })();
 </script>
 </body>

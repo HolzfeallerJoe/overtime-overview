@@ -24,7 +24,7 @@ npm run reconcile -- "<workbook>.xlsx"      # regression test vs the official re
 npm run import -- Dominik_Renken.csv        # preview an absence import
 npm run import -- Dominik_Renken.csv --write  # save to .cache/absences.json
 npm run dashboard                           # -> www/index.html + out/overtime.html
-start-server.bat / stop-server.bat           # serve www/ at localhost:8080
+start-server.bat / stop-server.bat           # serve www/ at localhost:8080, live refresh
 npx tsc --noEmit                            # typecheck
 ```
 
@@ -65,7 +65,8 @@ ESM project (`"type": "module"`) — relative imports need the `.js` extension.
 - `src/dashboard/standalone.ts` — wraps that fragment into a full document
 - `src/worktime/workbook.ts`, `src/xlsx.ts` — reader for the official xlsx
 - `scripts/` — `report.ts`, `dashboard.ts`, `import-absences.ts`, `reconcile.ts`
-- `server/serve.cjs` — dependency-free static server for `www/`, loopback only
+- `server/serve.cjs` — dependency-free server for `www/`, loopback only, with
+  live refresh (see below)
 
 ## Two HTML outputs
 
@@ -83,6 +84,22 @@ block before `<main>`.
 
 The local runner is a Node static server. Do not reach for nginx or Docker here:
 neither is available on this machine and Dominik has ruled both out.
+
+### Live refresh
+
+`serve.cjs` regenerates the page itself by spawning `scripts/dashboard.ts`
+(via `tsx/cli`) on startup and then every `REFRESH_MINUTES` (default 5, `0` =
+off) — but only while a page is connected; a page connecting to stale data
+triggers a catch-up run. `GET /events` is an SSE stream of
+`{ version, refreshing, error, lastRunAt, everyMinutes }`, where `version` is the
+mtime of `www/index.html` (so a manual `npm run dashboard` reaches open pages too,
+via `fs.watchFile`). `POST /refresh` regenerates now.
+
+On a new version the standalone page fetches `/index.html`, swaps `<main>`, and
+recreates every `body > script:not([data-shell])` so the chart binds to the new
+SVG. Shell scripts in `standalone.ts` carry `data-shell` and must keep it, or
+they would run twice. Requests with a foreign `Host`, and POSTs with a foreign
+`Origin`, get 403.
 
 ## Ledger semantics
 
