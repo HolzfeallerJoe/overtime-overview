@@ -1,0 +1,20 @@
+# The API key never goes into the image; it arrives via env_file.
+.env
+
+# The absence files (.cache/absences.json, absences.local.json) DO go in: they
+# seed the data volume on the first start (SEED_DIR). The image is built and
+# kept on your own server, never pushed anywhere.
+
+# Source exports stay out
+*.csv
+*.xlsx
+
+# Rebuilt inside the container, or not needed there
+node_modules/
+dist/
+www/
+out/
+*;C/
+.git
+*.log
+*.bat

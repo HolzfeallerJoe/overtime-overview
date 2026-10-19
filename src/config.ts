@@ -10,6 +10,9 @@ export const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..
 
 loadEnv({ path: resolve(PROJECT_ROOT, '.env'), quiet: true });
 
+/** Where the absence files live: the project itself, or the Docker volume. */
+export const DATA_DIR = process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : PROJECT_ROOT;
+
 const req = (name: string): string => {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is missing from .env (see example.env)`);

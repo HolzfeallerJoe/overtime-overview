@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { Absence } from './absences.js';
-import { PROJECT_ROOT } from './config.js';
+import { DATA_DIR } from './config.js';
 
-const CACHE_DIR = resolve(PROJECT_ROOT, '.cache');
+const CACHE_DIR = resolve(DATA_DIR, '.cache');
 const SYNCED = resolve(CACHE_DIR, 'absences.json');
-const MANUAL = resolve(PROJECT_ROOT, 'absences.local.json');
+const MANUAL = resolve(DATA_DIR, 'absences.local.json');
 
 export interface AbsenceCache {
   syncedAt: string;
@@ -24,11 +24,12 @@ export function loadAbsences(): { absences: Absence[]; syncedAt: string | null; 
   const cache = readJson<AbsenceCache>(SYNCED);
   const manual = readJson<Absence[]>(MANUAL) ?? [];
 
-  // Manual entries win over synced ones for the same date.
+  // Manual entries win over synced ones for the same date. A manual entry with
+  // fraction 0 only exists to do that: it removes a wrongly imported day.
   const manualDates = new Set(manual.map((a) => a.date));
   const merged = [
     ...(cache?.absences ?? []).filter((a) => !manualDates.has(a.date)),
-    ...manual,
+    ...manual.filter((a) => a.fraction > 0),
   ].sort((a, b) => a.date.localeCompare(b.date));
 
   return { absences: merged, syncedAt: cache?.syncedAt ?? null, manualCount: manual.length };

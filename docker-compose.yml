@@ -1,0 +1,32 @@
+# Overtime dashboard on a home server: copy this folder over, then
+#
+#   docker compose up -d --build
+#
+# .env, .cache/absences.json and absences.local.json come along with the
+# folder. The build copies the absence files into the image, and the first
+# start takes them into the data volume; from then on uploads and edits on the
+# page live there. Nothing reads the folder at runtime, so its owner and
+# permissions on the host don't matter.
+services:
+  overtime:
+    build: .
+    image: overtime-overview
+    container_name: overtime-overview
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      # Fixed inside the container; pick the outside port with OVERTIME_PORT.
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATA_DIR: /app/data
+      TZ: ${TIMEZONE:-Europe/Berlin}
+    ports:
+      - "${OVERTIME_PORT:-8080}:8080"
+    volumes:
+      # Imported absences and your corrections. A named volume, so the
+      # container can write it whoever owns the folder on the host.
+      - overtime-data:/app/data
+
+volumes:
+  overtime-data:

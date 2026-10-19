@@ -25,6 +25,7 @@ npm run import -- Dominik_Renken.csv        # preview an absence import
 npm run import -- Dominik_Renken.csv --write  # save to .cache/absences.json
 npm run dashboard                           # -> www/index.html + out/overtime.html
 start-server.bat / stop-server.bat           # serve www/ at localhost:8080, live refresh
+docker compose up -d --build                # on the home server, in the copied folder
 npx tsc --noEmit                            # typecheck
 ```
 
@@ -65,8 +66,9 @@ ESM project (`"type": "module"`) — relative imports need the `.js` extension.
 - `src/dashboard/standalone.ts` — wraps that fragment into a full document
 - `src/worktime/workbook.ts`, `src/xlsx.ts` — reader for the official xlsx
 - `scripts/` — `report.ts`, `dashboard.ts`, `import-absences.ts`, `reconcile.ts`
-- `server/serve.cjs` — dependency-free server for `www/`, loopback only, with
-  live refresh (see below)
+- `server/serve.cjs` — dependency-free server for `www/`, loopback by default,
+  with live refresh and the absence API (see below)
+- `Dockerfile`, `docker-compose.yml` — the home-server deployment
 
 ## Two HTML outputs
 
@@ -82,24 +84,94 @@ ESM project (`"type": "module"`) — relative imports need the `.js` extension.
 is head material. Keep the fragment starting with `<title>` and ending its head
 block before `<main>`.
 
-The local runner is a Node static server. Do not reach for nginx or Docker here:
-neither is available on this machine and Dominik has ruled both out.
+The runner is a Node static server — locally via `start-server.bat`, on
+Dominik's home server via `docker-compose.yml` (same `serve.cjs`, `node:22-alpine`,
+`.env` as `env_file`, runs as `node`). Do not add nginx in front of it.
+
+`DATA_DIR` (default: project root) relocates the absence files —
+`.cache/absences.json` and `absences.local.json` — for every script and the
+server. The image sets `/app/data`, a **named volume** `overtime-data`, not a
+bind mount: Docker creates missing bind sources as root (the `node` user then
+can't write) and a missing file source as a directory. The image pre-creates
+`/app/data` owned by `node` so a fresh volume inherits that.
+
+### Network
+
+`HOST` (default `127.0.0.1`) is the bind address; the container sets `0.0.0.0`.
+The `Host` header's name (port ignored) must be one a DNS-rebinding attack
+can't use: an IP literal, a single-label name (`homeserver`), a LAN suffix
+(`.local`, `.lan`, `.fritz.box`, … — `LAN_SUFFIXES`), or listed in
+`ALLOWED_HOSTS`. Public domains get 403. This is what makes `ALLOWED_HOSTS`
+unnecessary for Dominik's setup — keep it zero-config. There is no auth;
+LAN-only is the deployment model.
+
+### Deploying
+
+Dominik's workflow: **copy the project folder to the server, run `docker
+compose up -d --build`, nothing else.** No deploy script (one was built and
+dropped at his request), no manual `.env`/data steps on the server.
+
+To make that work, the build copies the whole folder (minus `.dockerignore`,
+which keeps `.env` out but lets the absence files in) into `/app`, and
+`SEED_DIR=/app`. `seedData()` in `serve.cjs` runs before `listen`, so before
+the startup refresh, and copies each of `.cache/absences.json` and
+`absences.local.json` into `DATA_DIR` **only if the volume has no such file
+yet**. After that the volume is the truth, and re-copying the folder never
+overwrites edits made on the page. `down -v` resets it to the image's copy.
+
+**The container never reads the host folder at runtime, and every `COPY` is
+`--chown=node:node`.** On the TrueNAS box the folder belongs to
+`truenas_admin` with owner-only modes; a read-only bind mount gave `EACCES`
+when the server seeded the absence files, and plain `COPY` carries those modes
+into the image, which very likely caused the failed refresh too. Tested by
+building from a tar context with every file `600` and owned by uid 950. Don't
+reintroduce a bind mount of the project folder.
+
+Running `docker compose` from Git Bash needs `MSYS_NO_PATHCONV=1` for any
+container path argument, or `/app/data/x` becomes
+`C:/Program Files/Git/app/data/x`.
 
 ### Live refresh
 
 `serve.cjs` regenerates the page itself by spawning `scripts/dashboard.ts`
-(via `tsx/cli`) on startup and then every `REFRESH_MINUTES` (default 5, `0` =
-off) — but only while a page is connected; a page connecting to stale data
-triggers a catch-up run. `GET /events` is an SSE stream of
-`{ version, refreshing, error, lastRunAt, everyMinutes }`, where `version` is the
+(via `tsx/cli`) on startup and then **once a day at `REFRESH_AT`** (default
+`00:00` in `TIMEZONE`, `off` = never) — Dominik asked for one nightly refresh,
+not an interval; don't bring the 5-minute polling back. Midnight rather than
+23:59 on purpose: the run then sees the finished day as closed (see "The open
+day") instead of leaving it uncharged until the next night. A 30s ticker fires
+the first time the wall clock passes `REFRESH_AT` each day; starting after that
+time counts as that day's run. `refresh(reason, true)` queues one more run when
+the data changed mid-run (absence edits/imports); plain calls join the running
+one. `GET /events` is an SSE stream of
+`{ version, refreshing, error, lastRunAt, dailyAt }`, where `version` is the
 mtime of `www/index.html` (so a manual `npm run dashboard` reaches open pages too,
 via `fs.watchFile`). `POST /refresh` regenerates now.
 
 On a new version the standalone page fetches `/index.html`, swaps `<main>`, and
 recreates every `body > script:not([data-shell])` so the chart binds to the new
 SVG. Shell scripts in `standalone.ts` carry `data-shell` and must keep it, or
-they would run twice. Requests with a foreign `Host`, and POSTs with a foreign
-`Origin`, get 403.
+they would run twice. Requests with a foreign `Host`, and any non-GET with a
+foreign `Origin`, get 403.
+
+### Absences on the page
+
+The standalone page (never the Artifact fragment) has a **Refresh** button and
+an **Absences** `<dialog>`, both outside `<main>` so the swap leaves them alone.
+They talk to:
+
+- `GET /api/absences` → `{ imported, importedAt, importSource, overrides }`
+- `PUT /api/absences/local` — replaces `absences.local.json` wholesale; the
+  server validates each entry (date, kind ∈ `AbsenceKind` minus `HOLIDAY`,
+  fraction 0–1) and forces `source: "manual"`. Written in place, not renamed.
+- `POST /api/absences/import` — body is the raw export; runs
+  `scripts/import-absences.ts` on a temp file and returns its output as a
+  preview. `?write=1` adds `--write`. The UI always previews first.
+
+Writes trigger `refresh(…, true)`. The dialog is one row per date: *Import*,
+*Edited* (override over an import), *Manual* (override only), *Removed*.
+Removing an imported day writes an override with **`fraction: 0`**, which
+`loadAbsences()` drops after merging — that is how an import gets suppressed
+without touching the import cache.
 
 ## Ledger semantics
 
@@ -220,7 +292,8 @@ Two real defects it caught, both now fixed:
 ## Absence precedence
 
 `.cache/absences.json` is owned by the importer (overwritten every run).
-`absences.local.json` is hand-maintained and **wins per date**, so corrections
+`absences.local.json` is hand-maintained (directly or via the page's Absences
+dialog) and **wins per date**, so corrections
 survive re-imports. Do not write imports into the local file — that was the
 original wiring and it made overrides impossible.
 

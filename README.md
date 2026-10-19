@@ -48,6 +48,7 @@ Everything runs through `npm run <name>`. Extra flags need `--` first, e.g.
 | `npm run typecheck` | `tsc --noEmit`. |
 | `start-server.bat` | Starts the server in its own window and opens the browser. |
 | `stop-server.bat` | Kills whatever is listening on port 8080. |
+| `docker compose up -d --build` | Runs it on a home server, see [below](#on-a-home-server-docker). |
 
 ### `npm run report`
 
@@ -121,9 +122,68 @@ start-server.bat     # start + open browser
 stop-server.bat      # stop
 ```
 
-To refresh: `npm run dashboard`, then reload the page. Set `PORT` to use a
-different port (`set PORT=9000 && npm run serve`); `stop-server.bat` is hard-coded
-to 8080.
+The server regenerates the page on startup and then once a day at `REFRESH_AT`
+(default `00:00`, `off` to disable); open pages update in place. Midnight closes
+the day just ended, so it is in the balance by morning. Set `PORT` to use a
+different port (`set PORT=9000 && npm run serve`); `stop-server.bat` is
+hard-coded to 8080.
+
+### On the page
+
+Served by the server (not as a file, not as an Artifact), the page has:
+
+- **Refresh** — pulls Clockify now, instead of waiting for midnight.
+- **Absences** — a dialog with two parts:
+  - *Import export*: choose the Timerevision CSV, check the preview, then
+    *Replace import*. Same as `npm run import -- <file> --write`.
+  - *Days*: every absence by year. Change kind, length (full/half) or note in
+    place, *Remove* a wrongly imported day, or add one that is missing.
+    Corrections go to `absences.local.json` and survive the next import;
+    *Revert*/*Restore* drops a correction again.
+
+Each change regenerates the dashboard.
+
+### On a home server (Docker)
+
+Copy this folder to the server (scp, WinSCP, a network share — include the
+hidden `.env` and `.cache/`), then in it:
+
+```bash
+docker compose up -d --build
+```
+
+That's all. The container comes back by itself after a reboot
+(`restart: unless-stopped`). On the first start it takes `.cache/absences.json`
+and `absences.local.json` from the folder into its data volume
+`overtime-data`. From then on the volume is the truth — uploads and edits on
+the page live there — and copying the folder again (to update) plus the same
+command never overwrites them. Who owns the folder on the server, and with
+which permissions, doesn't matter: the build reads it, the container never
+does.
+
+The server needs nothing but Docker with the compose plugin. Then open
+`http://<server>:8080/`. IPs, plain names (`homeserver`) and LAN names
+(`*.local`, `*.lan`, `*.fritz.box`, …) work without configuration. Optional
+settings in `.env`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ALLOWED_HOSTS` | — | Only for a real domain, e.g. behind a reverse proxy. Other public names get 403 (DNS-rebinding guard). `*` accepts any. |
+| `OVERTIME_PORT` | `8080` | Port published on the server. |
+| `REFRESH_AT` | `00:00` | Daily refresh time in `TIMEZONE`, `off` to disable. |
+
+Backup of your corrections, on the server:
+
+```bash
+docker compose exec overtime cat /app/data/absences.local.json > absences.local.json
+```
+
+`docker compose down -v` deletes the volume; the next start takes the files
+from the folder again.
+
+There is no login: anyone who can reach the port sees your working hours and
+can change your absences. Keep it on the LAN or behind a VPN, not forwarded to
+the internet.
 
 ---
 
@@ -181,8 +241,14 @@ the API. Durations are always computed from `start`/`end`, never from
 
 Two files feed the ledger, and precedence matters:
 
-- `.cache/absences.json` — written by `npm run import`, overwritten every run.
-- `absences.local.json` — hand-maintained, **wins per date**, survives re-imports.
+- `.cache/absences.json` — written by `npm run import` or the page's import,
+  overwritten every run.
+- `absences.local.json` — corrections, edited by hand or through the page's
+  **Absences** dialog. **Wins per date**, survives re-imports. An entry with
+  `"fraction": 0` removes that day's imported absence.
+
+With `DATA_DIR` set (the Docker image sets `/app/data`) both live under that
+directory instead of the project root.
 
 It currently holds one correction: 2025-09-08 was a half sick day per the
 workbook, but Timerevision records it as a full day with no way to tell.
@@ -239,7 +305,7 @@ src/
   time.ts         timezone and duration helpers, no dependencies
   xlsx.ts         minimal xlsx reader (shells out to unzip)
 scripts/          report · dashboard · import-absences · reconcile
-server/serve.cjs  static file server for www/
+server/serve.cjs  server for www/: live refresh + absence API
 www/              generated standalone page (gitignored)
 out/              generated artifact fragment (gitignored)
 ```
@@ -249,6 +315,8 @@ ESM project — relative imports need the `.js` extension.
 ## Privacy
 
 `www/`, `out/`, `.cache/`, `absences.local.json` and `.env` are gitignored: they
-hold your API key, your working hours and your absence history. The local server
-binds to loopback only. Keep the Timerevision CSV and the workbooks out of the
-repo — `*.csv` and `*.xlsx` are ignored too.
+hold your API key, your working hours and your absence history, and
+`.dockerignore` keeps them out of the image. The local server binds to loopback
+only; the Docker one listens on the LAN but only answers to `ALLOWED_HOSTS`.
+Keep the Timerevision CSV and the workbooks out of the repo — `*.csv` and
+`*.xlsx` are ignored too.
