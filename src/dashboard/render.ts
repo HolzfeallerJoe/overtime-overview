@@ -155,7 +155,7 @@ export function renderDashboard(ledger: Ledger, meta: DashboardMeta): string {
   const years = summarizeYears(ledger);
   const maxYearDelta = Math.max(...years.map((y) => Math.abs(y.deltaSeconds)), 1);
 
-  const yearCards = years.map((y) => {
+  const yearCards = years.map((y, i) => {
     const up = y.deltaSeconds >= 0;
     const width = (Math.abs(y.deltaSeconds) / maxYearDelta) * 50;
     return `
@@ -168,7 +168,7 @@ export function renderDashboard(ledger: Ledger, meta: DashboardMeta): string {
         </header>
         <p class="year-delta ${up ? 'up' : 'down'}">${formatDuration(y.deltaSeconds, { sign: true })}</p>
         <span class="bar-track year-bar">
-          <span class="bar ${up ? 'bar-up' : 'bar-down'}" style="width:${width.toFixed(1)}%"></span>
+          <span class="bar ${up ? 'bar-up' : 'bar-down'}" style="width:${width.toFixed(1)}%;--i:${i}"></span>
         </span>
         <dl class="year-facts">
           <div><dt>Worked</dt><dd>${formatDuration(y.workedSeconds)}</dd></div>
@@ -181,7 +181,7 @@ export function renderDashboard(ledger: Ledger, meta: DashboardMeta): string {
   }).join('');
 
   let lastYear = '';
-  const monthRows = months.map((m) => {
+  const monthRows = months.map((m, i) => {
     const up = m.deltaSeconds >= 0;
     const width = (Math.abs(m.deltaSeconds) / maxMonthDelta) * 50;
     const yearKey = m.key.slice(0, 4);
@@ -198,7 +198,7 @@ export function renderDashboard(ledger: Ledger, meta: DashboardMeta): string {
           <td class="num ${up ? 'up' : 'down'}">${formatDuration(m.deltaSeconds, { sign: true })}</td>
           <td class="bar-cell">
             <span class="bar-track">
-              <span class="bar ${up ? 'bar-up' : 'bar-down'}" style="width:${width.toFixed(1)}%"></span>
+              <span class="bar ${up ? 'bar-up' : 'bar-down'}" style="width:${width.toFixed(1)}%;--i:${i}"></span>
             </span>
           </td>
           <td class="num strong">${formatDuration(m.balanceSeconds, { sign: true })}</td>
@@ -482,6 +482,40 @@ export function renderDashboard(ledger: Ledger, meta: DashboardMeta): string {
   .crosshair { stroke: var(--ink-2); stroke-width: 1; opacity: 0; }
   .cursor-dot { opacity: 0; }
 
+  /* Motion. One orchestrated moment on load: the balance is replayed from the
+     first day, the hero figure riding along with the pen, then the bars grow
+     out of zero. Everything else answers an action. The script adds the
+     waiting states; without it, or with reduced motion, the page simply
+     stands at its final state. */
+  .end-ping {
+    fill: none; stroke-width: 2; opacity: 0;
+    transform-box: fill-box; transform-origin: center;
+  }
+  .end-ping.is-on { animation: end-ping 1.5s cubic-bezier(0.22, 1, 0.36, 1); }
+  @keyframes end-ping {
+    from { opacity: 0.8; transform: scale(1); }
+    to { opacity: 0; transform: scale(5.5); }
+  }
+
+  .bar {
+    transform-origin: left center;
+    transition: transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+    transition-delay: calc(var(--i, 0) * var(--stagger, 90ms));
+  }
+  .bar-down { transform-origin: right center; }
+  .table-scroll .bar { --stagger: 16ms; }
+  /* Waiting states switch transitions off, so bars vanish instantly and only
+     the growth back out is animated. */
+  .is-intro .year-bar .bar, .is-waiting .bar { transform: scaleX(0); transition: none; }
+
+  /* The note describes today's figure; while the hero replays older days it
+     steps back so the two never contradict each other. */
+  .hero-note, .open-day { transition: opacity 0.5s ease; }
+  .is-intro .hero-note, .is-intro .open-day { opacity: 0.25; }
+
+  .open-dot.is-live { animation: open-breathe 1.4s ease-in-out infinite alternate; }
+  @keyframes open-breathe { to { box-shadow: 0 0 0 5px var(--pos-fill); } }
+
   .tooltip {
     position: absolute;
     top: 0; left: 0;
@@ -669,10 +703,10 @@ export function renderDashboard(ledger: Ledger, meta: DashboardMeta): string {
 
   <section class="balance">
     <div class="hero-figure">
-      <span class="eyebrow">${reset
+      <span class="eyebrow" id="hero-label">${reset
         ? `${lastClosed.slice(0, 4)} balance through ${prettyDayMonth(lastClosed)}`
         : `Balance through ${prettyDate(lastClosed)}`}</span>
-      <p class="hero${positive ? '' : ' is-negative'}">${formatDuration(ledger.balanceSeconds, { sign: true })}</p>
+      <p class="hero${positive ? '' : ' is-negative'}" id="hero" data-balance="${Math.round(ledger.balanceSeconds)}">${formatDuration(ledger.balanceSeconds, { sign: true })}</p>
       <p class="hero-note">
         <strong>${formatDuration(Math.abs(ledger.balanceSeconds))}</strong>
         ${positive ? 'ahead of' : 'behind'} contract
@@ -695,18 +729,24 @@ ${caveat}
         <defs>
           <clipPath id="clip-above"><rect x="0" y="0" width="${W}" height="${g.zeroY.toFixed(1)}"/></clipPath>
           <clipPath id="clip-below"><rect x="0" y="${g.zeroY.toFixed(1)}" width="${W}" height="${(H - g.zeroY).toFixed(1)}"/></clipPath>
+          <!-- The replay wipes this open left to right; days only move right, so the wipe draws the line. -->
+          <clipPath id="clip-reveal"><rect id="reveal" x="0" y="0" width="${W}" height="${H}"/></clipPath>
         </defs>
 
         ${gridLines}
         ${g.xTicks.slice(1).map((t) => `<line class="year-rule" x1="${t.x.toFixed(1)}" x2="${t.x.toFixed(1)}" y1="${PAD_T}" y2="${H - PAD_B}"/>`).join('\n        ')}
 
-        <path d="${g.area}" fill="var(--pos-fill)" clip-path="url(#clip-above)"/>
-        <path d="${g.area}" fill="var(--neg-fill)" clip-path="url(#clip-below)"/>
+        <g clip-path="url(#clip-reveal)">
+          <path d="${g.area}" fill="var(--pos-fill)" clip-path="url(#clip-above)"/>
+          <path d="${g.area}" fill="var(--neg-fill)" clip-path="url(#clip-below)"/>
+        </g>
 
         <line class="zero-line" x1="${PAD_L}" x2="${W - PAD_R}" y1="${g.zeroY.toFixed(1)}" y2="${g.zeroY.toFixed(1)}"/>
 
-        <path class="balance-line" d="${g.path}" stroke="var(--pos)" clip-path="url(#clip-above)"/>
-        <path class="balance-line" d="${g.path}" stroke="var(--neg)" clip-path="url(#clip-below)"/>
+        <g clip-path="url(#clip-reveal)">
+          <path class="balance-line" d="${g.path}" stroke="var(--pos)" clip-path="url(#clip-above)"/>
+          <path class="balance-line" d="${g.path}" stroke="var(--neg)" clip-path="url(#clip-below)"/>
+        </g>
 
         ${yTickText}
         ${xTickText}
@@ -714,7 +754,9 @@ ${caveat}
         <line class="crosshair" id="crosshair" y1="${PAD_T}" y2="${H - PAD_B}"/>
         <circle class="cursor-dot" id="cursor-dot" r="4.5" fill="var(--surface)" stroke-width="2.5"/>
 
-        <circle cx="${g.endX.toFixed(1)}" cy="${g.endY.toFixed(1)}" r="4.5"
+        <circle class="end-ping" id="end-ping" cx="${g.endX.toFixed(1)}" cy="${g.endY.toFixed(1)}" r="4.5"
+                stroke="var(--${positive ? 'pos' : 'neg'})"/>
+        <circle id="end-dot" cx="${g.endX.toFixed(1)}" cy="${g.endY.toFixed(1)}" r="4.5"
                 fill="var(--surface)" stroke="var(--${positive ? 'pos' : 'neg'})" stroke-width="2.5"/>
 
         <rect id="hit" x="${PAD_L}" y="${PAD_T}" width="${W - PAD_L - PAD_R}" height="${H - PAD_T - PAD_B}" fill="transparent"/>
@@ -777,6 +819,10 @@ ${caveat}
     var tip = document.getElementById('tooltip');
     if (!svg || !hit) return;
 
+    var RESET = ${reset};
+    var MONTHS = ${JSON.stringify(MONTH_NAMES)};
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     function fmt(s) {
       var sign = s < 0 ? '-' : '';
       var a = Math.abs(s);
@@ -785,6 +831,151 @@ ${caveat}
       return sign + (h ? h + 'h ' : '') + m + 'm';
     }
     function fmtSigned(s) { return (s >= 0 ? '+' : '') + fmt(s); }
+
+    // --- Motion: the replay on load, the count on a live update --------------
+
+    var sheet = document.querySelector('main.sheet');
+    var hero = document.getElementById('hero');
+    var heroLabel = document.getElementById('hero-label');
+    var endDot = document.getElementById('end-dot');
+    var ping = document.getElementById('end-ping');
+    var reveal = document.getElementById('reveal');
+
+    // Same output as formatDuration(s, { sign: true }) on the server.
+    function heroText(s) {
+      var r = Math.round(s);
+      var a = Math.abs(r), h = Math.floor(a / 3600), m = Math.floor((a % 3600) / 60);
+      var parts = [];
+      if (h) parts.push(h + 'h');
+      if (m || !h) parts.push(m + 'm');
+      return (r < 0 ? '-' : r > 0 ? '+' : '') + parts.join(' ');
+    }
+    function setHero(s) {
+      hero.textContent = heroText(s);
+      hero.classList.toggle('is-negative', Math.round(s) < 0);
+    }
+    function dayLabel(key) {
+      var p = key.split('-');
+      var dm = Number(p[2]) + ' ' + MONTHS[Number(p[1]) - 1];
+      return RESET ? p[0] + ' balance through ' + dm : 'Balance through ' + dm + ' ' + p[0];
+    }
+    function inOut(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+    function out(t) { return 1 - Math.pow(1 - t, 3); }
+
+    function settle(finalText, finalLabel, finalNeg, finalStroke) {
+      hero.textContent = finalText;
+      heroLabel.textContent = finalLabel;
+      hero.classList.toggle('is-negative', finalNeg);
+      endDot.setAttribute('stroke', finalStroke);
+      ping.classList.remove('is-on');
+      void ping.getBoundingClientRect();
+      ping.classList.add('is-on');
+    }
+
+    /** Replays the whole history: the pen draws the line, the hero reads it out. */
+    function replay() {
+      var finalText = hero.textContent, finalLabel = heroLabel.textContent;
+      var finalNeg = hero.classList.contains('is-negative'), finalStroke = endDot.getAttribute('stroke');
+      var endX = endDot.getAttribute('cx'), endY = endDot.getAttribute('cy');
+      var n = days.length, shown = -1, start = null, DURATION = 2800;
+
+      sheet.classList.add('is-intro');
+      reveal.setAttribute('width', 0);
+
+      function frame(now) {
+        if (start === null) start = now;
+        var t = Math.min(1, (now - start) / DURATION);
+        var at = inOut(t) * (n - 1);
+        var i0 = Math.floor(at), i1 = Math.min(n - 1, i0 + 1), f = at - i0;
+        var x = days[i0].x + (days[i1].x - days[i0].x) * f;
+        var y = days[i0].y + (days[i1].y - days[i0].y) * f;
+        reveal.setAttribute('width', x + 0.5);
+        endDot.setAttribute('cx', x);
+        endDot.setAttribute('cy', y);
+
+        var i = Math.round(at);
+        if (i !== shown) {
+          shown = i;
+          setHero(days[i].b);
+          heroLabel.textContent = dayLabel(days[i].d);
+          endDot.setAttribute('stroke', days[i].b >= 0 ? 'var(--pos)' : 'var(--neg)');
+        }
+
+        if (t < 1) { requestAnimationFrame(frame); return; }
+        reveal.setAttribute('width', W);
+        endDot.setAttribute('cx', endX);
+        endDot.setAttribute('cy', endY);
+        settle(finalText, finalLabel, finalNeg, finalStroke);
+        sheet.classList.remove('is-intro');
+      }
+      requestAnimationFrame(frame);
+    }
+
+    /** A live update landed: count from the figure that was on screen to the new one. */
+    function countFrom(from) {
+      var to = Number(hero.getAttribute('data-balance'));
+      var finalText = hero.textContent, finalLabel = heroLabel.textContent;
+      var finalNeg = hero.classList.contains('is-negative'), finalStroke = endDot.getAttribute('stroke');
+      var start = null, DURATION = 1100;
+      if (from === to) { settle(finalText, finalLabel, finalNeg, finalStroke); return; }
+
+      function frame(now) {
+        if (start === null) start = now;
+        var t = Math.min(1, (now - start) / DURATION);
+        setHero(from + (to - from) * out(t));
+        if (t < 1) { requestAnimationFrame(frame); return; }
+        settle(finalText, finalLabel, finalNeg, finalStroke);
+      }
+      requestAnimationFrame(frame);
+    }
+
+    /** Month bars grow out of zero once the table scrolls into view. */
+    function growMonthsOnSight() {
+      var table = document.querySelector('.table-scroll');
+      if (!table || !window.IntersectionObserver) return;
+      table.classList.add('is-waiting');
+      var io = new IntersectionObserver(function (entries) {
+        if (!entries.some(function (e) { return e.isIntersecting; })) return;
+        table.classList.remove('is-waiting');
+        io.disconnect();
+      }, { threshold: 0.1 });
+      io.observe(table);
+    }
+
+    // The standalone shell leaves the old figure here when it swaps in fresh numbers.
+    var prev = window.__overtimePrev;
+    window.__overtimePrev = undefined;
+
+    if (!reduce && window.requestAnimationFrame && days.length > 1 && hero && reveal) {
+      if (prev && typeof prev.balance === 'number') countFrom(prev.balance);
+      else { replay(); growMonthsOnSight(); }
+    }
+
+    // --- Hover: crosshair and dot glide to the day under the pointer ---------
+
+    var cur = null, goal = null, raf = 0;
+
+    function place(p) {
+      var box = svg.getBoundingClientRect();
+      cross.setAttribute('x1', p.x);
+      cross.setAttribute('x2', p.x);
+      dot.setAttribute('cx', p.x);
+      dot.setAttribute('cy', p.y);
+      var left = (p.x / W) * box.width + 22;
+      tip.style.left = Math.min(Math.max(8, left), box.width - tip.offsetWidth - 8) + 'px';
+      tip.style.top = Math.max(6, (p.y / H) * box.height - 34) + 'px';
+    }
+
+    function glide() {
+      cur.x += (goal.x - cur.x) * 0.3;
+      cur.y += (goal.y - cur.y) * 0.3;
+      if (Math.abs(goal.x - cur.x) < 0.2 && Math.abs(goal.y - cur.y) < 0.2) {
+        cur.x = goal.x; cur.y = goal.y; raf = 0;
+      } else {
+        raf = requestAnimationFrame(glide);
+      }
+      place(cur);
+    }
 
     function show(point) {
       var box = svg.getBoundingClientRect();
@@ -796,11 +987,7 @@ ${caveat}
       var d = days[i];
       if (!d) return;
 
-      cross.setAttribute('x1', d.x);
-      cross.setAttribute('x2', d.x);
       cross.style.opacity = '0.4';
-      dot.setAttribute('cx', d.x);
-      dot.setAttribute('cy', d.y);
       dot.setAttribute('stroke', d.b >= 0 ? 'var(--pos)' : 'var(--neg)');
       dot.style.opacity = '1';
 
@@ -815,12 +1002,17 @@ ${caveat}
         (d.a ? '<div class="tt-absence">' + d.a + '</div>' : '');
 
       tip.classList.add('is-on');
-      var left = (d.x / W) * box.width + 22;
-      tip.style.left = Math.min(Math.max(8, left), box.width - tip.offsetWidth - 8) + 'px';
-      tip.style.top = Math.max(6, (d.y / H) * box.height - 34) + 'px';
+
+      // First touch lands directly; after that the marker glides.
+      goal = { x: d.x, y: d.y };
+      if (!cur || reduce) { cur = { x: d.x, y: d.y }; place(cur); }
+      else if (!raf) raf = requestAnimationFrame(glide);
     }
 
     function hide() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      cur = null;
       cross.style.opacity = '0';
       dot.style.opacity = '0';
       tip.classList.remove('is-on');

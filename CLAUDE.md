@@ -329,6 +329,31 @@ undertime. All three theme states are handled (bare `:root`, the
 `prefers-color-scheme` media query guarded with `:not([data-theme="light"])`,
 and `:root[data-theme="dark"]`).
 
+### Motion
+
+Dominik asked for "fancy animations". The rule kept: **one orchestrated moment
+on load, everything else answers an action.** Don't add fade-ups per section.
+
+- **Replay (load, `render.ts`):** a left-to-right wipe of `#clip-reveal` draws
+  the line and area. That only works because x grows monotonically with the
+  day, so don't switch it to `stroke-dashoffset`; dashing restarts per subpath,
+  and the line is one subpath per year. `#end-dot` rides the pen, the hero
+  shows each passed day's balance and `#hero-label` its date. At the end the
+  server's exact text is restored, `#end-ping` fires once, and year bars grow
+  from zero. Month bars wait (`.is-waiting`) until the table scrolls into view.
+- **Waiting states switch `transition: none`**, so bars hide instantly and only
+  the growth back is animated.
+- **Live swap:** the shell stores the old `#hero[data-balance]` in
+  `window.__overtimePrev`; the new page script counts from it instead of
+  replaying.
+- **Shell (`standalone.ts`):** the theme toggle uses a View Transition circle
+  from the button; the dialog animates in and out (closing via `closeDialog()`,
+  which Esc also routes through); saved rows flash blue, removed ones red.
+- **Reduced motion:** the script skips everything and the CSS
+  `prefers-reduced-motion` block kills transitions, so the page simply stands
+  at its final state. Without JS the same holds; the markup always carries the
+  final values.
+
 To preview locally, wrap it before screenshotting:
 
 ```bash

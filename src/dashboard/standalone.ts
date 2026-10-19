@@ -83,9 +83,9 @@ ${head}
   #refresh[data-busy] svg { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* Briefly mark the sheet when fresh numbers land. */
-  main.is-fresh { animation: sheet-fresh 0.6s ease-out; }
-  @keyframes sheet-fresh { from { opacity: 0.55; } }
+  /* Theme switch: the new theme spreads in a circle from the button (the
+     script drives the clip-path; the browser's crossfade is switched off). */
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 
   /* --- Absences dialog ------------------------------------------------ */
 
@@ -102,6 +102,24 @@ ${head}
     font-size: 14px;
   }
   .abs::backdrop { background: rgba(11, 12, 14, 0.5); }
+
+  .abs[open] { animation: abs-in 0.34s cubic-bezier(0.22, 1, 0.36, 1); }
+  .abs[open]::backdrop { animation: abs-fade 0.34s ease-out; }
+  .abs.is-closing { animation: abs-out 0.18s ease-in forwards; }
+  .abs.is-closing::backdrop { animation: abs-fade 0.18s ease-in reverse forwards; }
+  @keyframes abs-in { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
+  @keyframes abs-out { to { opacity: 0; transform: translateY(8px) scale(0.985); } }
+  @keyframes abs-fade { from { opacity: 0; } }
+
+  /* A row just saved flashes in the colour of what happened to it. */
+  .abs tr.is-flash td { animation: row-flash 1.6s ease-out; }
+  .abs tr.is-removed.is-flash td { animation-name: row-flash-removed; }
+  @keyframes row-flash { from { background: var(--pos-fill); } }
+  @keyframes row-flash-removed { from { background: var(--neg-fill); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .abs::backdrop, .abs.is-closing::backdrop { animation: none; }
+  }
 
   .abs-head {
     position: sticky; top: 0; z-index: 1;
@@ -322,7 +340,20 @@ ${body}
     btn.addEventListener('click', function () {
       mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
       try { localStorage.setItem(KEY, mode); } catch (e) {}
-      apply();
+
+      var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!document.startViewTransition || still) { apply(); return; }
+
+      // The new theme grows out of the button until it covers the farthest corner.
+      var r = btn.getBoundingClientRect();
+      var x = r.left + r.width / 2, y = r.top + r.height / 2;
+      var radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+      document.startViewTransition(apply).ready.then(function () {
+        document.documentElement.animate(
+          { clipPath: ['circle(0px at ' + x + 'px ' + y + 'px)', 'circle(' + radius + 'px at ' + x + 'px ' + y + 'px)'] },
+          { duration: 600, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', pseudoElement: '::view-transition-new(root)' }
+        );
+      }).catch(function () {});
     });
 
     apply();
@@ -389,8 +420,11 @@ ${body}
           var current = document.querySelector('main');
           if (!next || !current) throw new Error('no <main> in the new page');
 
+          // The page's own script counts from the figure that was on screen.
+          var oldHero = current.querySelector('#hero');
+          window.__overtimePrev = oldHero ? { balance: Number(oldHero.getAttribute('data-balance')) } : undefined;
+
           var fresh = document.importNode(next, true);
-          fresh.classList.add('is-fresh');
           current.replaceWith(fresh);
           if (doc.title) document.title = doc.title;
 
@@ -533,9 +567,16 @@ ${body}
         .then(function (j) {
           data = j;
           draw();
+          flash(date);
           say(message + ' The dashboard is updating.');
+          return true;
         })
-        .catch(function (err) { say('Could not save: ' + err.message, true); draw(); });
+        .catch(function (err) { say('Could not save: ' + err.message, true); draw(); return false; });
+    }
+
+    function flash(date) {
+      var tr = rowsEl.querySelector('tr[data-date="' + date + '"]');
+      if (tr) tr.classList.add('is-flash');
     }
 
     // --- View ----------------------------------------------------------------
@@ -649,11 +690,13 @@ ${body}
       var weekend = day === 0 || day === 6;
       setOverride(date, { kind: f.kind.value, fraction: Number(f.fraction.value), label: f.label.value.trim() },
         prettyDate(date).date + ' added.' + (weekend ? ' It is a weekend, so it does not change the balance.' : ''))
-        .then(function () {
+        .then(function (saved) {
+          if (!saved) return;
           f.label.value = '';
           yearEl.value = date.slice(0, 4);
           onlyEl.checked = false;
           draw();
+          flash(date);
         });
     });
 
@@ -729,10 +772,20 @@ ${body}
         .catch(function (err) { say('Could not load absences: ' + err.message, true); });
     }
 
+    // Closing plays a short exit first; with reduced motion it just closes.
+    function closeDialog() {
+      if (!dialog.open || dialog.classList.contains('is-closing')) return;
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { dialog.close(); return; }
+      dialog.classList.add('is-closing');
+      setTimeout(function () { dialog.classList.remove('is-closing'); dialog.close(); }, 180);
+    }
+
     openBtn.addEventListener('click', function () { dialog.showModal(); load(); });
-    $('abs-close').addEventListener('click', function () { dialog.close(); });
+    $('abs-close').addEventListener('click', closeDialog);
+    // Esc arrives as "cancel"; route it through the same exit.
+    dialog.addEventListener('cancel', function (e) { e.preventDefault(); closeDialog(); });
     // A click on the backdrop lands on the dialog element itself.
-    dialog.addEventListener('click', function (e) { if (e.target === dialog) dialog.close(); });
+    dialog.addEventListener('click', function (e) { if (e.target === dialog) closeDialog(); });
   })();
 </script>
 </body>
